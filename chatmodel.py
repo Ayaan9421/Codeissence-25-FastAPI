@@ -74,6 +74,7 @@ def check_and_reset_session():
 #     response = chat_chain.run(user_input)
 #     print("Friend:", response)
 
+# print(memory)
 
 app = FastAPI(title="Supportive Friend Chatbot")
 

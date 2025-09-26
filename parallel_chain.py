@@ -7,12 +7,15 @@ from langchain.output_parsers import PydanticOutputParser
 from transformers import pipeline
 from langchain_core.runnables import RunnableLambda
 from langchain.schema.runnable import RunnableParallel
+import warnings
+warnings.filterwarnings("ignore")
 
 load_dotenv()
 
 asr = pipeline(
     task = "automatic-speech-recognition", 
-    model="Oriserve/Whisper-Hindi2Hinglish-Swift"
+    model="Oriserve/Whisper-Hindi2Hinglish-Swift",
+    device=0 
 )
 
 def asr_run(audio_file: str)-> str:
@@ -22,7 +25,8 @@ asr_runnable = RunnableLambda(asr_run)
 
 ver = pipeline(
     task="audio-classification",
-    model="harshit345/xlsr-wav2vec-speech-emotion-recognition"
+    model="harshit345/xlsr-wav2vec-speech-emotion-recognition",
+    device=0 
 )
 
 def ver_run(audio_file: str):
@@ -32,7 +36,8 @@ ver_runnable = RunnableLambda(ver_run)
 
 remap = RunnableLambda(lambda x: {
     "report_asr": x["stta"].model_dump_json(),
-    "report_ver": x["ste"].model_dump_json()
+    "report_ver": x["ste"].model_dump_json(),
+    "transcript": x["transcript"]  # keep raw transcription
 })
 
 llm = HuggingFaceEndpoint(
@@ -47,11 +52,30 @@ class EmotionDetail(BaseModel):
     score: float = Field(..., description="Confidence score of the detected emotion (0-1)")
 
 class DepressionReport(BaseModel):
-    depression_score: int = Field(..., description="Depression level on a scale of 1 to 10", min=0, max=10)
-    description: str = Field(..., description="Explanation of depression level based on emotion analysis")
-    risks: List[str] = Field(..., description="Potential risks or warning signs detected from emotions")
-    advice: str = Field(..., description="Practical advice or next steps for the user")
-    emotions: List[EmotionDetail] = Field(..., description="Detailed breakdown of detected emotions with scores")
+    transcript: str = Field(
+        None, description="Raw transcribed text from speech input"
+    )
+    depression_score: int = Field(
+        ..., 
+        description="Depression level on a scale of 1 to 10", 
+        ge=0, le=10
+    )
+    description: str = Field(
+        ..., 
+        description="Explanation of depression level based on emotion analysis"
+    )
+    risks: List[str] = Field(
+        ..., 
+        description="Potential risks or warning signs detected from emotions"
+    )
+    advice: List[str] = Field(
+        ..., 
+        description="Practical advice or next steps for the user, as a list of suggestions"
+    )
+    emotions: List[EmotionDetail] = Field(
+        ..., 
+        description="Detailed breakdown of detected emotions with scores"
+    )
 
 parser = PydanticOutputParser(pydantic_object=DepressionReport)
 
@@ -138,7 +162,8 @@ ste_chain = ver_runnable | promptTemplate_ste | llm_model | parser
 
 parallel_chain = RunnableParallel({
     'stta': sttta_chain,
-    'ste': ste_chain
+    'ste': ste_chain,
+    'transcript': asr_runnable  # <-- keeps raw text
 })
 
 final_chain = parallel_chain | remap | promptTemplate_merge | llm_model | parser
