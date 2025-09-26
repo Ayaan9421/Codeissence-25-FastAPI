@@ -1,4 +1,6 @@
+import tempfile
 from typing import List
+from fastapi.responses import JSONResponse
 from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from dotenv import load_dotenv
 from langchain_core.prompts import PromptTemplate
@@ -8,6 +10,8 @@ from transformers import pipeline
 from langchain_core.runnables import RunnableLambda
 from langchain.schema.runnable import RunnableParallel
 import warnings
+from fastapi import APIRouter, File, UploadFile
+
 warnings.filterwarnings("ignore")
 
 load_dotenv()
@@ -163,11 +167,28 @@ ste_chain = ver_runnable | promptTemplate_ste | llm_model | parser
 parallel_chain = RunnableParallel({
     'stta': sttta_chain,
     'ste': ste_chain,
-    'transcript': asr_runnable  # <-- keeps raw text
+    'transcript': asr_runnable
 })
 
 final_chain = parallel_chain | remap | promptTemplate_merge | llm_model | parser
 
-print(final_chain.get_graph().print_ascii())
-result = final_chain.invoke(input("Enter Audio File Name: "))
-print(result.dict())
+# print(final_chain.get_graph().print_ascii())
+# result = final_chain.invoke(input("Enter Audio File Name: "))
+# print(result.dict())
+
+router = APIRouter()
+
+@router.post("/analyze", response_model=DepressionReport)
+async def analyze_audio(file: UploadFile = File(...)):
+    # Save uploaded file to a temp location
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        tmp.write(await file.read())
+        tmp_path = tmp.name
+
+    # Run final chain
+    result: DepressionReport = final_chain.invoke(tmp_path)
+
+    # Inject transcript into result object
+    result.transcript = result.transcript or result.transcript
+
+    return JSONResponse(content=result.model_dump())

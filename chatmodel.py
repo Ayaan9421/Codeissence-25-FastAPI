@@ -59,7 +59,6 @@ def check_and_reset_session():
     now = datetime.datetime.now()
     if (now - last_reset_time).total_seconds() > SESSION_EXPIRY_HOURS * 3600:
         # TODO: Save chat history to DB
-        
         # Reset memory
         memory.clear()
         last_reset_time = now

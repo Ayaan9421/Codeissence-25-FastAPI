@@ -91,5 +91,7 @@ async def chat_endpoint(request: ChatRequest):
     chat_chain = get_session(request.session_id)
     response = chat_chain.run(request.user_input)
     print(sessions)
-    print("$"*80)
     return ChatResponse(reply=response)
+
+from parallel_chain import router
+app.include_router(router=router)
