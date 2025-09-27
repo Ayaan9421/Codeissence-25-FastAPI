@@ -9,10 +9,9 @@ from langchain.output_parsers import PydanticOutputParser
 from transformers import pipeline
 from langchain_core.runnables import RunnableLambda
 from langchain.schema.runnable import RunnableParallel
-import warnings
 from fastapi import APIRouter, File, UploadFile
-
-warnings.filterwarnings("ignore")
+import os
+from pydub import AudioSegment
 
 load_dotenv()
 
@@ -176,10 +175,11 @@ final_chain = parallel_chain | remap | promptTemplate_merge | llm_model | parser
 # result = final_chain.invoke(input("Enter Audio File Name: "))
 # print(result.dict())
 
-router = APIRouter()
+router_pc = APIRouter()
 
-@router.post("/analyze", response_model=DepressionReport)
+@router_pc.post("/analyze", response_model=DepressionReport)
 async def analyze_audio(file: UploadFile = File(...)):
+    print("hello")
     # Save uploaded file to a temp location
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
         tmp.write(await file.read())

@@ -93,5 +93,7 @@ async def chat_endpoint(request: ChatRequest):
     print(sessions)
     return ChatResponse(reply=response)
 
-from parallel_chain import router
-app.include_router(router=router)
+from parallel_chain import router_pc
+from tta import router_tta
+app.include_router(router=router_pc)
+app.include_router(router=router_tta)
