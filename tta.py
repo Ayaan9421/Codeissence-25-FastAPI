@@ -1,5 +1,5 @@
 import tempfile
-from typing import List
+from typing import List, Optional
 from fastapi.responses import JSONResponse
 from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from dotenv import load_dotenv
@@ -50,14 +50,8 @@ class DepressionReport(BaseModel):
         ..., 
         description="Potential risks or warning signs detected from emotions"
     )
-    advice: List[str] = Field(
-        ..., 
-        description="Practical advice or next steps for the user, as a list of suggestions"
-    )
-    emotions: List[EmotionDetail] = Field(
-        ..., 
-        description="Detailed breakdown of detected emotions with scores"
-    )
+    advice: Optional[List[str]] = Field(None, description="Practical advice or next steps for the user")
+    emotions: Optional[List[EmotionDetail]] = Field(None, description="Detailed breakdown of detected emotions with scores")
 
 parser = PydanticOutputParser(pydantic_object=DepressionReport)
 
@@ -85,10 +79,16 @@ Return the output strictly in the following JSON format:
 
 chain = promptTemplate | llm_model | parser 
 
+# 1. Define a Pydantic model for the request body
+class TextAnalysisRequest(BaseModel):
+    text: str
+
 router_tta = APIRouter()
+
 @router_tta.post('/text', response_model=DepressionReport)
-async def analyze_text(text: str):
-    result : DepressionReport = chain.invoke(text)
-    return JSONResponse(content= result.model_dump())
+async def analyze_text(request: TextAnalysisRequest):
+    result: DepressionReport = chain.invoke(request.text)
+    print(result)
+    return JSONResponse(content=result.model_dump())
 
 

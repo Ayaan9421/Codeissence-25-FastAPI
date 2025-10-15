@@ -21,15 +21,17 @@ llm = HuggingFaceEndpoint(
 
 chat_model = ChatHuggingFace(llm=llm)
 
+
+
 memory = ConversationBufferMemory(
     memory_key="history",
-    return_messages=True
+    # return_messages=True
 )
 
 chat_chain = ConversationChain(
     llm=chat_model,
     memory=memory,
-    verbose=True
+    verbose = False
 )
 
 supportive_prompt = PromptTemplate(
@@ -39,6 +41,7 @@ Your goal is to make the user feel relaxed and less stressed.
 Keep your replies short (1-3 sentences). 
 Sound casual and natural, like chatting on WhatsApp. 
 Never lecture or over-explain.
+Reply in the same text style as the user 
 
 Conversation so far:
 {history}

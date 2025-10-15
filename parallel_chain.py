@@ -12,6 +12,7 @@ from langchain.schema.runnable import RunnableParallel
 from fastapi import APIRouter, File, UploadFile
 import os
 from pydub import AudioSegment
+import soundfile as sf
 
 load_dotenv()
 
@@ -177,18 +178,56 @@ final_chain = parallel_chain | remap | promptTemplate_merge | llm_model | parser
 
 router_pc = APIRouter()
 
+from pydub import AudioSegment
+
+def fix_audio_format(in_path: str, out_path: str):
+    try:
+        audio = AudioSegment.from_file(in_path)
+    except Exception:
+        audio = AudioSegment.from_file(in_path, format="wav")
+    audio = audio.set_channels(1).set_frame_rate(16000)
+    audio.export(out_path, format="wav")
+
+
 @router_pc.post("/analyze", response_model=DepressionReport)
 async def analyze_audio(file: UploadFile = File(...)):
-    print("hello")
-    # Save uploaded file to a temp location
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-        tmp.write(await file.read())
-        tmp_path = tmp.name
+    tmp_in_path = None
+    tmp_out_path = None
+    try:
+        # 1. Save the uploaded file to a temporary location
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp") as tmp_in:
+            tmp_in.write(await file.read())
+            tmp_in_path = tmp_in.name
 
-    # Run final chain
-    result: DepressionReport = final_chain.invoke(tmp_path)
+        # 2. Use pydub to standardize the audio into the correct format for the AI
+        audio = AudioSegment.from_file(tmp_in_path)
+        audio = audio.set_channels(1)       # Mono
+        audio = audio.set_frame_rate(16000) # 16kHz sample rate
 
-    # Inject transcript into result object
-    result.transcript = result.transcript or result.transcript
+        # 3. Export the clean audio to a new temporary WAV file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_out:
+            audio.export(tmp_out.name, format="wav")
+            tmp_out_path = tmp_out.name # This is the clean file we'll use
 
-    return JSONResponse(content=result.model_dump())
+        # 4. Run the final analysis chain on the clean audio file
+        result: DepressionReport = final_chain.invoke(tmp_out_path)
+
+        # 5. Inject the transcript into the result object for consistency
+        if result:
+             result.transcript = result.transcript or "Transcript not available."
+
+        return JSONResponse(content=result.model_dump())
+
+    except Exception as e:
+        print(f"An error occurred during audio analysis: {e}")
+        # Return a more informative error to the frontend
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Failed to process audio file: {e}"}
+        )
+    finally:
+        # 6. Clean up both temporary files
+        if tmp_in_path and os.path.exists(tmp_in_path):
+            os.remove(tmp_in_path)
+        if tmp_out_path and os.path.exists(tmp_out_path):
+            os.remove(tmp_out_path)
