@@ -38,10 +38,16 @@ def ver_run(audio_file: str):
 
 ver_runnable = RunnableLambda(ver_run)
 
-remap = RunnableLambda(lambda x: {
-    "report_asr": x["stta"].model_dump_json(),
-    "report_ver": x["ste"].model_dump_json(),
-    "transcript": x["transcript"]  # keep raw transcription
+remap_audio = RunnableLambda(lambda x: {
+    "report_asr_audio": x["stta_audio"].model_dump_json(),
+    "report_ver_audio": x["ste_audio"].model_dump_json(),
+    "transcript_audio": x["transcript_audio"]
+})
+
+remap_call = RunnableLambda(lambda x: {
+    "report_asr_call": x["stta_call"].model_dump_json(),
+    "report_ver_call": x["ste_call"].model_dump_json(),
+    "summary_call": x["summary_call"]
 })
 
 llm = HuggingFaceEndpoint(
@@ -51,13 +57,23 @@ llm = HuggingFaceEndpoint(
 
 llm_model = ChatHuggingFace(llm=llm)
 
+from enum import Enum
+
+class MoodStage(str, Enum):
+    ACCEPTANCE = "Acceptance"
+    DENIAL = "Denial"
+    BARGAINING = "Bargaining"
+    ANGER = "Anger"
+    DEPRESSION = "Depression"
+
+
 class EmotionDetail(BaseModel):
-    label: str = Field(..., description="Emotion label detected")
-    score: float = Field(..., description="Confidence score of the detected emotion (0-1)")
+    label: MoodStage = Field(..., description="Emotion stage detected (one of the five standard labels)")
+    score: float = Field(..., ge=0.0, le=1.0, description="Confidence score of the detected emotion (0-1)")
 
 class DepressionReport(BaseModel):
     transcript: str = Field(
-        None, description="Raw transcribed text from speech input"
+        ..., description="Raw transcribed text from speech input"
     )
     depression_score: int = Field(
         ..., 
@@ -81,96 +97,340 @@ class DepressionReport(BaseModel):
         description="Detailed breakdown of detected emotions with scores"
     )
 
-parser = PydanticOutputParser(pydantic_object=DepressionReport)
+class CallAnalysisReport(BaseModel):
+    summary: str = Field(
+        ..., 
+        description="Short AI-generated summary of the conversation or call content, 4-5 sentences, just the summary of the call and no analysis"
+    )
+    depression_score: int = Field(
+        ..., 
+        description="Depression level on a scale of 1 to 10", 
+        ge=0, le=10
+    )
+    description: str = Field(
+        ..., 
+        description="Explanation of depression level based on emotion analysis"
+    )
+    risks: List[str] = Field(
+        ..., 
+        description="Potential risks or warning signs detected from emotions"
+    )
+    advice: List[str] = Field(
+        ..., 
+        description="Practical advice or next steps for the user, as a list of suggestions"
+    )
+    emotions: List[EmotionDetail] = Field(
+        ..., 
+        description="Detailed breakdown of detected emotions with scores"
+    )
 
-promptTemplate_sttta = PromptTemplate(
+parser_audio = PydanticOutputParser(pydantic_object=DepressionReport)
+parser_call = PydanticOutputParser(pydantic_object=CallAnalysisReport)
+
+# =====================================
+#  AUDIO PROMPTS (for journal entries)
+# =====================================
+
+promptTemplate_sttta_audio = PromptTemplate(
     template="""
 You are a mental health expert. Analyze the following transcribed speech text from a user 
-and provide insights on their depression level and potential mental health risks.
+and assess their emotional wellbeing on a scale of 0–10, where **lower is healthier**.
 
 Transcribed Text:
 {text_or_emotion}
 
-Instructions:
-1. Provide a depression_score on a scale of 1 to 10 (1 = very low, 10 = very high).
-2. Give a concise description explaining how the text indicates the user's emotional state and depression assessment.
-3. Highlight any potential risks or warning signs inferred from the text.
-4. Suggest practical advice or next steps for the user.
+### Emotion Scale (0–10)
+- 0–2 → **Acceptance (😌)** — Calm, balanced, emotionally healthy.
+- 2–4 → **Denial (🤔)** — Mild avoidance or unwillingness to confront emotions.
+- 4–6 → **Bargaining (🥺)** — Trying to rationalize or control emotional pain.
+- 6–8 → **Anger (😠)** — Irritation, frustration, or emotional volatility.
+- 8–10 → **Depression (😔)** — Sadness, hopelessness, or emotional withdrawal.
 
-Return the output strictly in the following JSON format:
+### Instructions:
+1. Assign a `depression_score` between 0 and 10 using the above emotion mapping.
+2. Write a short `description` explaining which emotional stage this score corresponds to and why.
+3. Identify any potential `risks` or warning signs if distress appears.
+4. Suggest simple, compassionate `advice` or next steps for emotional regulation.
+5. Keep tone **empathetic, non-diagnostic**, and friendly.
+
+### Instructions for Emotion Output
+- Only return **these five emotion stages**:
+  Acceptance, Denial, Bargaining, Anger, Depression
+- Each must have a confidence score between 0.0 and 1.0
+- Do not invent or use any other labels
+- If the emotion is not strongly detected, you can assign a low score (e.g., 0.0–0.2)
+- Make sure the sum of scores does **not need to equal 1**, but each score should reflect the LLM's confidence
+
+### Extremely Important Note:
+- Only return these five emotion stages:
+  Acceptance, Denial, Bargaining, Anger, Depression
+- Do not invent or use any other labels
+
+Return the output strictly in this JSON format:
 
 {format_instructions}
 """,
     input_variables=["text_or_emotion"],
-    partial_variables={"format_instructions": parser.get_format_instructions()},
+    partial_variables={"format_instructions": parser_audio.get_format_instructions()},
 )
 
-promptTemplate_ste = PromptTemplate(
-    template="""
-You are a mental health expert specializing in analyzing emotional states from speech. 
-Analyze the following emotion recognition output from a user and provide insights on their 
-depression level and potential mental health risks.
 
-Emotion Data (label and confidence scores): 
+promptTemplate_ste_audio = PromptTemplate(
+    template="""
+You are a mental health expert analyzing emotion recognition data from a user's speech.
+Each label represents a detected emotion and its confidence score.
+
+Emotion Data:
 {text_or_emotion}
 
-Instructions:
-1. Provide a depression_score on a scale of 1 to 10 (1 = very low, 10 = very high).
-2. Give a concise description explaining how the emotional distribution relates to the depression assessment.
-3. Highlight any potential risks or warning signs based on the emotions detected.
-4. Suggest practical advice or next steps for the user.
+### Emotion Scale (0–10)
+- 0–2 → **Acceptance (😌)** — Calm and emotionally stable tone.
+- 2–4 → **Denial (🤔)** — Slight tension or emotional avoidance.
+- 4–6 → **Bargaining (🥺)** — Signs of inner conflict or seeking reassurance.
+- 6–8 → **Anger (😠)** — Raised energy, frustration, or agitation in tone.
+- 8–10 → **Depression (😔)** — Low energy, sadness, or emotional fatigue.
 
-Return the output strictly in the following JSON format:
+### Instructions:
+1. Assign a `depression_score` (0–10) using the above emotional stages.
+2. Write a concise `description` describing the emotional state and reasoning.
+3. Identify any potential `risks` (e.g., signs of distress, irritability, or hopelessness).
+4. Provide kind and actionable `advice` for self-care or coping.
+5. Keep tone neutral, warm, and supportive.
+
+### Instructions for Emotion Output
+- Only return **these five emotion stages**:
+  Acceptance, Denial, Bargaining, Anger, Depression
+- Each must have a confidence score between 0.0 and 1.0
+- Do not invent or use any other labels
+- If the emotion is not strongly detected, you can assign a low score (e.g., 0.0–0.2)
+- Make sure the sum of scores does **not need to equal 1**, but each score should reflect the LLM's confidence
+
+### Extremely Important Note:
+- Only return these five emotion stages:
+  Acceptance, Denial, Bargaining, Anger, Depression
+- Do not invent or use any other labels
+
+Return the output strictly in this JSON format:
 
 {format_instructions}
 """,
     input_variables=["text_or_emotion"],
-    partial_variables={"format_instructions": parser.get_format_instructions()},
+    partial_variables={"format_instructions": parser_audio.get_format_instructions()},
 )
 
-promptTemplate_merge = PromptTemplate(
+
+promptTemplate_merge_audio = PromptTemplate(
     template="""
-You are a senior mental health expert. You will receive two structured depression assessment reports:  
-1. One based on **speech-to-text analysis** (journal content)  
-2. One based on **vocal emotion recognition** (tone/emotion distribution).  
-depression_score=0 means No depression whereas depression_score=10 means Highly depressed.
-Your job is to carefully combine and normalize the insights from both reports into a **final unified assessment**.
+You are a senior mental health expert. You will receive two structured reports:
+1. A **speech-to-text-based** analysis.
+2. A **vocal emotion recognition** analysis.
+
+Your goal is to merge them into one unified, balanced mental wellbeing report.
 
 Inputs:
-- Report from speech-to-text analysis: {report_asr}
-- Report from vocal emotion recognition: {report_ver}
+- Speech Analysis Report: {report_asr_audio}
+- Emotion Analysis Report: {report_ver_audio}
 
-Instructions:
-1. Normalize both depression scores to a final single `depression_score` (integer 1–10).  
-   - If both reports agree, keep the same score.  
-   - If they differ, average them (round sensibly).  
-   - If one has strong risks flagged, lean slightly towards the higher score.  
+### Emotion Scale (0–10)
+- 0–2 → **Acceptance (😌)** — Calm, grounded, emotionally well.
+- 2–4 → **Denial (🤔)** — Avoiding discomfort or stress.
+- 4–6 → **Bargaining (🥺)** — Trying to rationalize or seek control.
+- 6–8 → **Anger (😠)** — Irritable, emotionally intense, or reactive.
+- 8–10 → **Depression (😔)** — Sad, hopeless, or emotionally withdrawn.
 
-2. Write a **concise but clear description** summarizing why this depression level was chosen, referencing evidence from both inputs.  
+### Instructions:
+1. Normalize both reports into a final `depression_score` (0–10).
+   - If both agree, keep that value.
+   - If different, average and round sensibly.
+   - If one shows strong risk, lean slightly higher.
+2. Write a short, clear `description` summarizing which emotional stage fits best and why.
+3. Merge all `risks` (avoid duplicates).
+4. Combine `advice` from both, focusing on positivity and coping.
+5. Merge `emotions` from both reports.
 
-3. Merge all potential `risks` from both reports (avoid duplicates).  
+### Additional Instructions for Emotion Output
+- Merge the `emotions` list from both reports
+- Only keep the five standard emotions: Acceptance, Denial, Bargaining, Anger, Depression
+- Avoid creating new labels
+- Keep confidence scores (0–1) and deduplicate if necessary
 
-4. Suggest practical `advice` based on combined findings.  
+### Extremely Important Note:
+- Only return these five emotion stages:
+  Acceptance, Denial, Bargaining, Anger, Depression
+- Do not invent or use any other labels
 
-5. Provide a merged list of `emotions` from both reports with their scores.  
+Return the output strictly in this JSON format:
 
-Return the output strictly in the following JSON format:  
 {format_instructions}
 """,
-    input_variables=["report_asr", "report_ver"],
-    partial_variables={"format_instructions": parser.get_format_instructions()},
+    input_variables=["report_asr_audio", "report_ver_audio"],
+    partial_variables={"format_instructions": parser_audio.get_format_instructions()},
 )
 
-sttta_chain = asr_runnable | promptTemplate_sttta | llm_model | parser
-ste_chain = ver_runnable | promptTemplate_ste | llm_model | parser
 
-parallel_chain = RunnableParallel({
-    'stta': sttta_chain,
-    'ste': ste_chain,
-    'transcript': asr_runnable
+# =====================================
+#  CALL PROMPTS
+# =====================================
+
+promptTemplate_sttta_call = PromptTemplate(
+    template="""
+You are an AI summarizer for call recordings.
+
+Your task:
+1. Write a **neutral, human-like summary** (2–4 sentences) describing what was discussed in the call.
+   - Do NOT include emotional or mental health analysis here.
+   - Focus only on what happened or was discussed.
+
+Then assess the **emotional wellbeing** of the user based on call content.
+
+### Emotion Scale (0–10)
+- 0–2 → **Acceptance (😌)** — Calm, composed, emotionally clear communication.
+- 2–4 → **Denial (🤔)** — Avoidant or dismissive tone or statements.
+- 4–6 → **Bargaining (🥺)** — Uncertainty, reasoning, or seeking reassurance.
+- 6–8 → **Anger (😠)** — Frustration or tension in words or phrasing.
+- 8–10 → **Depression (😔)** — Hopeless, sad, or emotionally low expressions.
+
+### Instructions:
+2. Assign a `depression_score` using this emotional scale.
+3. Add a short `description` that matches the corresponding emotional state.
+4. List any clear `risks` (stress cues, hopelessness, etc.).
+5. Provide gentle `advice` for next steps.
+6. Keep `emotions` list empty or neutral if tone isn’t clearly emotional.
+
+### Instructions for Emotion Output
+- Only return **these five emotion stages**:
+  Acceptance, Denial, Bargaining, Anger, Depression
+- Each must have a confidence score between 0.0 and 1.0
+- Do not invent or use any other labels
+- If the emotion is not strongly detected, you can assign a low score (e.g., 0.0–0.2)
+- Make sure the sum of scores does **not need to equal 1**, but each score should reflect the LLM's confidence
+
+### Extremely Important Note:
+- Only return these five emotion stages:
+  Acceptance, Denial, Bargaining, Anger, Depression
+- Do not invent or use any other labels
+
+Return the output strictly in this JSON format:
+
+{format_instructions}
+""",
+    input_variables=["text_or_emotion"],
+    partial_variables={"format_instructions": parser_call.get_format_instructions()},
+)
+
+
+promptTemplate_ste_call = PromptTemplate(
+    template="""
+You are analyzing vocal emotion data extracted from a user's call.
+Each emotion label shows how the user sounded during the call.
+
+Emotion Data:
+{text_or_emotion}
+
+### Emotion Scale (0–10)
+- 0–2 → **Acceptance (😌)** — Calm, positive, or composed tone.
+- 2–4 → **Denial (🤔)** — Defensive, avoiding discomfort.
+- 4–6 → **Bargaining (🥺)** — Nervous or uncertain tone, seeking reassurance.
+- 6–8 → **Anger (😠)** — Frustration, irritation, or emotional strain.
+- 8–10 → **Depression (😔)** — Low tone, sadness, emotional fatigue.
+
+### Instructions:
+1. Write a **neutral call summary** (2–4 sentences) about what was discussed (no emotional judgments).
+2. Assign a `depression_score` (0–10) based on tone and emotion levels.
+3. Explain briefly in `description` which stage fits best.
+4. List any `risks` if the emotions suggest high stress or sadness.
+5. Give short, warm, practical `advice` (e.g., taking rest, talking to friends).
+6. Keep tone supportive and neutral.
+
+### Instructions for Emotion Output
+- Only return **these five emotion stages**:
+  Acceptance, Denial, Bargaining, Anger, Depression
+- Each must have a confidence score between 0.0 and 1.0
+- Do not invent or use any other labels
+- If the emotion is not strongly detected, you can assign a low score (e.g., 0.0–0.2)
+- Make sure the sum of scores does **not need to equal 1**, but each score should reflect the LLM's confidence
+
+### Extremely Important Note:
+- Only return these five emotion stages:
+  Acceptance, Denial, Bargaining, Anger, Depression
+- Do not invent or use any other labels
+
+Return the output strictly in this JSON format:
+
+{format_instructions}
+""",
+    input_variables=["text_or_emotion"],
+    partial_variables={"format_instructions": parser_call.get_format_instructions()},
+)
+
+
+promptTemplate_merge_call = PromptTemplate(
+    template="""
+You are a senior mental health reviewer. Two reports are provided from a call:
+1. A transcript-based analysis.
+2. A vocal emotion-based analysis.
+
+Your task is to merge them into one unified, human-like call summary and emotional wellbeing report.
+
+Inputs:
+- Transcript Report: {report_asr_call}
+- Emotion Report: {report_ver_call}
+
+### Emotion Scale (0–10)
+- 0–2 → **Acceptance (😌)** — Calm and balanced.
+- 2–4 → **Denial (🤔)** — Avoidance or mild defensiveness.
+- 4–6 → **Bargaining (🥺)** — Uncertainty or internal conflict.
+- 6–8 → **Anger (😠)** — Tension or frustration.
+- 8–10 → **Depression (😔)** — Sadness, hopelessness, or emotional fatigue.
+
+### Instructions:
+1. Combine both summaries into one **neutral and factual** summary (2–5 sentences).
+2. Normalize the two `depression_score`s into one final value.
+3. Write a short `description` explaining the emotional stage and reasoning.
+4. Merge and deduplicate all `risks`, `advice`, and `emotions`.
+5. Keep everything aligned to the above emotional range.
+
+### Additional Instructions for Emotion Output
+- Merge the `emotions` list from both reports
+- Only keep the five standard emotions: Acceptance, Denial, Bargaining, Anger, Depression
+- Avoid creating new labels
+- Keep confidence scores (0–1) and deduplicate if necessary
+
+### Extremely Important Note:
+- Only return these five emotion stages:
+  Acceptance, Denial, Bargaining, Anger, Depression
+- Do not invent or use any other labels
+
+Return the output strictly in this JSON format:
+
+{format_instructions}
+""",
+    input_variables=["report_asr_call", "report_ver_call"],
+    partial_variables={"format_instructions": parser_call.get_format_instructions()},
+)
+
+
+sttta_chain_audio = asr_runnable | promptTemplate_sttta_audio | llm_model | parser_audio
+ste_chain_audio = ver_runnable | promptTemplate_ste_audio | llm_model | parser_audio
+
+parallel_chain_audio = RunnableParallel({
+    'stta_audio': sttta_chain_audio,
+    'ste_audio': ste_chain_audio,
+    'transcript_audio': asr_runnable
 })
+final_chain_audio = parallel_chain_audio | remap_audio | promptTemplate_merge_audio | llm_model | parser_audio
 
-final_chain = parallel_chain | remap | promptTemplate_merge | llm_model | parser
+
+wrap_for_prompt = RunnableLambda(lambda text: {"text_or_emotion": text})
+sttta_chain_call = asr_runnable | wrap_for_prompt | promptTemplate_sttta_call | llm_model | parser_call
+ste_chain_call = ver_runnable | wrap_for_prompt | promptTemplate_ste_call | llm_model | parser_call
+
+parallel_chain_call = RunnableParallel({
+    'stta_call': sttta_chain_call,
+    'ste_call': ste_chain_call,
+    'summary_call': asr_runnable
+})
+final_chain_call = parallel_chain_call | remap_call | promptTemplate_merge_call | llm_model | parser_call
 
 # print(final_chain.get_graph().print_ascii())
 # result = final_chain.invoke(input("Enter Audio File Name: "))
@@ -189,7 +449,7 @@ def fix_audio_format(in_path: str, out_path: str):
     audio.export(out_path, format="wav")
 
 
-@router_pc.post("/analyze", response_model=DepressionReport)
+@router_pc.post("/analyze-journal", response_model=DepressionReport)
 async def analyze_audio(file: UploadFile = File(...)):
     tmp_in_path = None
     tmp_out_path = None
@@ -210,7 +470,7 @@ async def analyze_audio(file: UploadFile = File(...)):
             tmp_out_path = tmp_out.name # This is the clean file we'll use
 
         # 4. Run the final analysis chain on the clean audio file
-        result: DepressionReport = final_chain.invoke(tmp_out_path)
+        result: DepressionReport = final_chain_audio.invoke(tmp_out_path)
 
         # 5. Inject the transcript into the result object for consistency
         if result:
@@ -227,6 +487,43 @@ async def analyze_audio(file: UploadFile = File(...)):
         )
     finally:
         # 6. Clean up both temporary files
+        if tmp_in_path and os.path.exists(tmp_in_path):
+            os.remove(tmp_in_path)
+        if tmp_out_path and os.path.exists(tmp_out_path):
+            os.remove(tmp_out_path)
+
+
+@router_pc.post("/analyze-call", response_model=CallAnalysisReport)
+async def analyze_call(file: UploadFile = File(...)):
+    tmp_in_path = None
+    tmp_out_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp") as tmp_in:
+            tmp_in.write(await file.read())
+            tmp_in_path = tmp_in.name
+
+        audio = AudioSegment.from_file(tmp_in_path)
+        audio = audio.set_channels(1)       
+        audio = audio.set_frame_rate(16000)
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_out:
+            audio.export(tmp_out.name, format="wav")
+            tmp_out_path = tmp_out.name
+
+        result: CallAnalysisReport = final_chain_call.invoke(tmp_out_path)
+
+        if result:
+            result.summary = result.summary or "Summary not available."
+
+        return JSONResponse(content=result.model_dump())
+
+    except Exception as e:
+        print(f"An error occurred during audio analysis: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Failed to process audio file: {e}"}
+        )
+    finally:
         if tmp_in_path and os.path.exists(tmp_in_path):
             os.remove(tmp_in_path)
         if tmp_out_path and os.path.exists(tmp_out_path):
