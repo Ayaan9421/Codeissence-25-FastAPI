@@ -68,8 +68,8 @@ class MoodStage(str, Enum):
 
 
 class EmotionDetail(BaseModel):
-    label: MoodStage = Field(..., description="Emotion stage detected (one of the five standard labels)")
-    score: float = Field(..., ge=0.0, le=1.0, description="Confidence score of the detected emotion (0-1)")
+    label: str = Field(..., description="Emotion label detected")
+    score: float = Field(..., description="Confidence score of the detected emotion (0-1)")
 
 class DepressionReport(BaseModel):
     transcript: str = Field(
@@ -139,32 +139,11 @@ and assess their emotional wellbeing on a scale of 0–10, where **lower is heal
 Transcribed Text:
 {text_or_emotion}
 
-### Emotion Scale (0–10)
-- 0–2 → **Acceptance (😌)** — Calm, balanced, emotionally healthy.
-- 2–4 → **Denial (🤔)** — Mild avoidance or unwillingness to confront emotions.
-- 4–6 → **Bargaining (🥺)** — Trying to rationalize or control emotional pain.
-- 6–8 → **Anger (😠)** — Irritation, frustration, or emotional volatility.
-- 8–10 → **Depression (😔)** — Sadness, hopelessness, or emotional withdrawal.
-
-### Instructions:
-1. Assign a `depression_score` between 0 and 10 using the above emotion mapping.
-2. Write a short `description` explaining which emotional stage this score corresponds to and why.
-3. Identify any potential `risks` or warning signs if distress appears.
-4. Suggest simple, compassionate `advice` or next steps for emotional regulation.
-5. Keep tone **empathetic, non-diagnostic**, and friendly.
-
-### Instructions for Emotion Output
-- Only return **these five emotion stages**:
-  Acceptance, Denial, Bargaining, Anger, Depression
-- Each must have a confidence score between 0.0 and 1.0
-- Do not invent or use any other labels
-- If the emotion is not strongly detected, you can assign a low score (e.g., 0.0–0.2)
-- Make sure the sum of scores does **not need to equal 1**, but each score should reflect the LLM's confidence
-
-### Extremely Important Note:
-- Only return these five emotion stages:
-  Acceptance, Denial, Bargaining, Anger, Depression
-- Do not invent or use any other labels
+Instructions:
+1. Provide a depression_score on a scale of 1 to 10 (1 = very low, 10 = very high).
+2. Give a concise description explaining how the text indicates the user's emotional state and depression assessment.
+3. Highlight any potential risks or warning signs inferred from the text.
+4. Suggest practical advice or next steps for the user.
 
 Return the output strictly in this JSON format:
 
@@ -183,32 +162,11 @@ Each label represents a detected emotion and its confidence score.
 Emotion Data:
 {text_or_emotion}
 
-### Emotion Scale (0–10)
-- 0–2 → **Acceptance (😌)** — Calm and emotionally stable tone.
-- 2–4 → **Denial (🤔)** — Slight tension or emotional avoidance.
-- 4–6 → **Bargaining (🥺)** — Signs of inner conflict or seeking reassurance.
-- 6–8 → **Anger (😠)** — Raised energy, frustration, or agitation in tone.
-- 8–10 → **Depression (😔)** — Low energy, sadness, or emotional fatigue.
-
-### Instructions:
-1. Assign a `depression_score` (0–10) using the above emotional stages.
-2. Write a concise `description` describing the emotional state and reasoning.
-3. Identify any potential `risks` (e.g., signs of distress, irritability, or hopelessness).
-4. Provide kind and actionable `advice` for self-care or coping.
-5. Keep tone neutral, warm, and supportive.
-
-### Instructions for Emotion Output
-- Only return **these five emotion stages**:
-  Acceptance, Denial, Bargaining, Anger, Depression
-- Each must have a confidence score between 0.0 and 1.0
-- Do not invent or use any other labels
-- If the emotion is not strongly detected, you can assign a low score (e.g., 0.0–0.2)
-- Make sure the sum of scores does **not need to equal 1**, but each score should reflect the LLM's confidence
-
-### Extremely Important Note:
-- Only return these five emotion stages:
-  Acceptance, Denial, Bargaining, Anger, Depression
-- Do not invent or use any other labels
+Instructions:
+1. Provide a depression_score on a scale of 1 to 10 (1 = very low, 10 = very high).
+2. Give a concise description explaining how the emotional distribution relates to the depression assessment.
+3. Highlight any potential risks or warning signs based on the emotions detected.
+4. Suggest practical advice or next steps for the user.
 
 Return the output strictly in this JSON format:
 
@@ -231,33 +189,19 @@ Inputs:
 - Speech Analysis Report: {report_asr_audio}
 - Emotion Analysis Report: {report_ver_audio}
 
-### Emotion Scale (0–10)
-- 0–2 → **Acceptance (😌)** — Calm, grounded, emotionally well.
-- 2–4 → **Denial (🤔)** — Avoiding discomfort or stress.
-- 4–6 → **Bargaining (🥺)** — Trying to rationalize or seek control.
-- 6–8 → **Anger (😠)** — Irritable, emotionally intense, or reactive.
-- 8–10 → **Depression (😔)** — Sad, hopeless, or emotionally withdrawn.
+Instructions:
+1. Normalize both depression scores to a final single `depression_score` (integer 1–10).  
+   - If both reports agree, keep the same score.  
+   - If they differ, average them (round sensibly).  
+   - If one has strong risks flagged, lean slightly towards the higher score.  
 
-### Instructions:
-1. Normalize both reports into a final `depression_score` (0–10).
-   - If both agree, keep that value.
-   - If different, average and round sensibly.
-   - If one shows strong risk, lean slightly higher.
-2. Write a short, clear `description` summarizing which emotional stage fits best and why.
-3. Merge all `risks` (avoid duplicates).
-4. Combine `advice` from both, focusing on positivity and coping.
-5. Merge `emotions` from both reports.
+2. Write a **concise but clear description** summarizing why this depression level was chosen, referencing evidence from both inputs.  
 
-### Additional Instructions for Emotion Output
-- Merge the `emotions` list from both reports
-- Only keep the five standard emotions: Acceptance, Denial, Bargaining, Anger, Depression
-- Avoid creating new labels
-- Keep confidence scores (0–1) and deduplicate if necessary
+3. Merge all potential `risks` from both reports (avoid duplicates).  
 
-### Extremely Important Note:
-- Only return these five emotion stages:
-  Acceptance, Denial, Bargaining, Anger, Depression
-- Do not invent or use any other labels
+4. Suggest practical `advice` based on combined findings.  
+
+5. Provide a merged list of `emotions` from both reports with their scores.
 
 Return the output strictly in this JSON format:
 
@@ -266,7 +210,6 @@ Return the output strictly in this JSON format:
     input_variables=["report_asr_audio", "report_ver_audio"],
     partial_variables={"format_instructions": parser_audio.get_format_instructions()},
 )
-
 
 # =====================================
 #  CALL PROMPTS
@@ -283,32 +226,11 @@ Your task:
 
 Then assess the **emotional wellbeing** of the user based on call content.
 
-### Emotion Scale (0–10)
-- 0–2 → **Acceptance (😌)** — Calm, composed, emotionally clear communication.
-- 2–4 → **Denial (🤔)** — Avoidant or dismissive tone or statements.
-- 4–6 → **Bargaining (🥺)** — Uncertainty, reasoning, or seeking reassurance.
-- 6–8 → **Anger (😠)** — Frustration or tension in words or phrasing.
-- 8–10 → **Depression (😔)** — Hopeless, sad, or emotionally low expressions.
-
-### Instructions:
-2. Assign a `depression_score` using this emotional scale.
-3. Add a short `description` that matches the corresponding emotional state.
-4. List any clear `risks` (stress cues, hopelessness, etc.).
-5. Provide gentle `advice` for next steps.
-6. Keep `emotions` list empty or neutral if tone isn’t clearly emotional.
-
-### Instructions for Emotion Output
-- Only return **these five emotion stages**:
-  Acceptance, Denial, Bargaining, Anger, Depression
-- Each must have a confidence score between 0.0 and 1.0
-- Do not invent or use any other labels
-- If the emotion is not strongly detected, you can assign a low score (e.g., 0.0–0.2)
-- Make sure the sum of scores does **not need to equal 1**, but each score should reflect the LLM's confidence
-
-### Extremely Important Note:
-- Only return these five emotion stages:
-  Acceptance, Denial, Bargaining, Anger, Depression
-- Do not invent or use any other labels
+Instructions:
+1. Provide a depression_score on a scale of 1 to 10 (1 = very low, 10 = very high).
+2. Give a concise description explaining how the text indicates the user's emotional state and depression assessment.
+3. Highlight any potential risks or warning signs inferred from the text.
+4. Suggest practical advice or next steps for the user.
 
 Return the output strictly in this JSON format:
 
@@ -318,7 +240,6 @@ Return the output strictly in this JSON format:
     partial_variables={"format_instructions": parser_call.get_format_instructions()},
 )
 
-
 promptTemplate_ste_call = PromptTemplate(
     template="""
 You are analyzing vocal emotion data extracted from a user's call.
@@ -327,33 +248,11 @@ Each emotion label shows how the user sounded during the call.
 Emotion Data:
 {text_or_emotion}
 
-### Emotion Scale (0–10)
-- 0–2 → **Acceptance (😌)** — Calm, positive, or composed tone.
-- 2–4 → **Denial (🤔)** — Defensive, avoiding discomfort.
-- 4–6 → **Bargaining (🥺)** — Nervous or uncertain tone, seeking reassurance.
-- 6–8 → **Anger (😠)** — Frustration, irritation, or emotional strain.
-- 8–10 → **Depression (😔)** — Low tone, sadness, emotional fatigue.
-
-### Instructions:
-1. Write a **neutral call summary** (2–4 sentences) about what was discussed (no emotional judgments).
-2. Assign a `depression_score` (0–10) based on tone and emotion levels.
-3. Explain briefly in `description` which stage fits best.
-4. List any `risks` if the emotions suggest high stress or sadness.
-5. Give short, warm, practical `advice` (e.g., taking rest, talking to friends).
-6. Keep tone supportive and neutral.
-
-### Instructions for Emotion Output
-- Only return **these five emotion stages**:
-  Acceptance, Denial, Bargaining, Anger, Depression
-- Each must have a confidence score between 0.0 and 1.0
-- Do not invent or use any other labels
-- If the emotion is not strongly detected, you can assign a low score (e.g., 0.0–0.2)
-- Make sure the sum of scores does **not need to equal 1**, but each score should reflect the LLM's confidence
-
-### Extremely Important Note:
-- Only return these five emotion stages:
-  Acceptance, Denial, Bargaining, Anger, Depression
-- Do not invent or use any other labels
+Instructions:
+1. Provide a depression_score on a scale of 1 to 10 (1 = very low, 10 = very high).
+2. Give a concise description explaining how the emotional distribution relates to the depression assessment.
+3. Highlight any potential risks or warning signs based on the emotions detected.
+4. Suggest practical advice or next steps for the user.
 
 Return the output strictly in this JSON format:
 
@@ -376,30 +275,19 @@ Inputs:
 - Transcript Report: {report_asr_call}
 - Emotion Report: {report_ver_call}
 
-### Emotion Scale (0–10)
-- 0–2 → **Acceptance (😌)** — Calm and balanced.
-- 2–4 → **Denial (🤔)** — Avoidance or mild defensiveness.
-- 4–6 → **Bargaining (🥺)** — Uncertainty or internal conflict.
-- 6–8 → **Anger (😠)** — Tension or frustration.
-- 8–10 → **Depression (😔)** — Sadness, hopelessness, or emotional fatigue.
+Instructions:
+1. Normalize both depression scores to a final single `depression_score` (integer 1–10).  
+   - If both reports agree, keep the same score.  
+   - If they differ, average them (round sensibly).  
+   - If one has strong risks flagged, lean slightly towards the higher score.  
 
-### Instructions:
-1. Combine both summaries into one **neutral and factual** summary (2–5 sentences).
-2. Normalize the two `depression_score`s into one final value.
-3. Write a short `description` explaining the emotional stage and reasoning.
-4. Merge and deduplicate all `risks`, `advice`, and `emotions`.
-5. Keep everything aligned to the above emotional range.
+2. Write a **concise but clear description** summarizing why this depression level was chosen, referencing evidence from both inputs.  
 
-### Additional Instructions for Emotion Output
-- Merge the `emotions` list from both reports
-- Only keep the five standard emotions: Acceptance, Denial, Bargaining, Anger, Depression
-- Avoid creating new labels
-- Keep confidence scores (0–1) and deduplicate if necessary
+3. Merge all potential `risks` from both reports (avoid duplicates).  
 
-### Extremely Important Note:
-- Only return these five emotion stages:
-  Acceptance, Denial, Bargaining, Anger, Depression
-- Do not invent or use any other labels
+4. Suggest practical `advice` based on combined findings.  
+
+5. Provide a merged list of `emotions` from both reports with their scores.
 
 Return the output strictly in this JSON format:
 
@@ -476,6 +364,7 @@ async def analyze_audio(file: UploadFile = File(...)):
         if result:
              result.transcript = result.transcript or "Transcript not available."
 
+        print(result.model_dump())
         return JSONResponse(content=result.model_dump())
 
     except Exception as e:
@@ -515,6 +404,7 @@ async def analyze_call(file: UploadFile = File(...)):
         if result:
             result.summary = result.summary or "Summary not available."
 
+        print(result.model_dump())
         return JSONResponse(content=result.model_dump())
 
     except Exception as e:
